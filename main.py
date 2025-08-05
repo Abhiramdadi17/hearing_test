@@ -1,35 +1,59 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 import noisereduce as nr
-import scipy.io.wavfile as wav
 import numpy as np
+import soundfile as sf
 import os
-import uuid
 
 app = FastAPI()
 
-UPLOAD_DIR = "uploads"
-PROCESSED_DIR = "processed"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(PROCESSED_DIR, exist_ok=True)
+# Optional: Enable CORS so your Flutter app or web client can access the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all for now; restrict this in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.post("/denoise-audio/")
+@app.get("/")
+def read_root():
+    return {"message": "Noise Reduction API is running"}
+
+@app.post("/denoise")
 async def denoise_audio(file: UploadFile = File(...)):
-    # Save uploaded file
-    raw_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}.wav")
-    with open(raw_path, "wb") as buffer:
-        buffer.write(await file.read())
+    input_path = f"temp_{file.filename}"
+    output_path = f"cleaned_{file.filename}"
 
-    # Read and reduce noise
-    rate, data = wav.read(raw_path)
+    try:
+        # Save uploaded audio
+        with open(input_path, "wb") as f:
+            f.write(await file.read())
 
-    if data.ndim > 1:
-        data = data.mean(axis=1).astype(data.dtype)  # Convert to mono
+        # Read audio
+        audio, rate = sf.read(input_path)
 
-    reduced_noise = nr.reduce_noise(y=data, sr=rate)
+        # Apply noise reduction
+        reduced_noise = nr.reduce_noise(y=audio, sr=rate)
 
-    # Save processed file
-    cleaned_path = os.path.join(PROCESSED_DIR, f"cleaned_{os.path.basename(raw_path)}")
-    wav.write(cleaned_path, rate, reduced_noise.astype(np.int16))
+        # Save cleaned audio
+        sf.write(output_path, reduced_noise, rate)
 
-    return FileResponse(cleaned_path, media_type="audio/wav", filename="denoised_audio.wav")
+        # Return the cleaned file as binary content
+        with open(output_path, "rb") as f:
+            content = f.read()
+
+        return {
+            "filename": output_path,
+            "data": content.hex()  # You'll decode this on client side
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        # Clean up temp files
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
