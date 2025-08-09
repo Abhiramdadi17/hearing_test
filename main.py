@@ -7,7 +7,7 @@ import os
 
 app = FastAPI()
 
-# Allow Flutter app to call API
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,31 +26,19 @@ async def denoise_audio(file: UploadFile = File(...)):
     output_path = f"cleaned_{file.filename}"
 
     try:
-        # Save uploaded audio to disk
+        # Save uploaded file
         with open(input_path, "wb") as f:
             f.write(await file.read())
 
         # Read audio
-        audio, rate = sf.read(input_path, dtype='float32')
+        audio, rate = sf.read(input_path)
 
-        # Ensure mono for smaller memory usage
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-
-        chunk_size = rate * 2  # 2 seconds per chunk
-        cleaned_audio = []
-
-        for start in range(0, len(audio), chunk_size):
-            chunk = audio[start:start+chunk_size]
-            reduced_chunk = nr.reduce_noise(y=chunk, sr=rate)
-            cleaned_audio.append(reduced_chunk)
-
-        cleaned_audio = np.concatenate(cleaned_audio)
+        # Apply noise reduction
+        reduced_noise = nr.reduce_noise(y=audio, sr=rate)
 
         # Save cleaned audio
-        sf.write(output_path, cleaned_audio, rate)
+        sf.write(output_path, reduced_noise, rate)
 
-        # Return file as hex string
         with open(output_path, "rb") as f:
             content = f.read()
 
@@ -63,7 +51,13 @@ async def denoise_audio(file: UploadFile = File(...)):
         return {"error": str(e)}
 
     finally:
+        # Cleanup
         if os.path.exists(input_path):
             os.remove(input_path)
         if os.path.exists(output_path):
             os.remove(output_path)
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))  # Use Railway's PORT or default to 10000
+    uvicorn.run(app, host="0.0.0.0", port=port)
